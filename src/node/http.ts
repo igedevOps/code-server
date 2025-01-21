@@ -76,6 +76,25 @@ export const replaceTemplates = <T extends object>(
 }
 
 /**
+ * Throw an error if proxy is not enabled. Call `next` if provided.
+ */
+export const ensureProxyEnabled = (req: express.Request, _?: express.Response, next?: express.NextFunction): void => {
+  if (!proxyEnabled(req)) {
+    throw new HttpError("Forbidden", HttpCode.Forbidden)
+  }
+  if (next) {
+    next()
+  }
+}
+
+/**
+ * Return true if proxy is enabled.
+ */
+export const proxyEnabled = (req: express.Request): boolean => {
+  return !req.args["disable-proxy"]
+}
+
+/**
  * Throw an error if not authorized. Call `next` if provided.
  */
 export const ensureAuthenticated = async (
@@ -300,8 +319,8 @@ export const getCookieOptions = (req: express.Request): express.CookieOptions =>
   // URL of that page) and the relative path to the root as given to it by the
   // backend.  Using these two we can determine the true absolute root.
   const url = new URL(
-    req.query.base || req.body.base || "/",
-    req.query.href || req.body.href || "http://" + (req.headers.host || "localhost"),
+    req.query.base || req.body?.base || "/",
+    req.query.href || req.body?.href || "http://" + (req.headers.host || "localhost"),
   )
   return {
     domain: getCookieDomain(url.host, req.args["proxy-domain"]),
@@ -355,6 +374,11 @@ export function authenticateOrigin(req: express.Request): void {
     throw new Error(`unable to parse malformed origin "${originRaw}"`)
   }
 
+  const trustedOrigins = req.args["trusted-origins"] || []
+  if (trustedOrigins.includes(origin) || trustedOrigins.includes("*")) {
+    return
+  }
+
   const host = getHost(req)
   if (typeof host === "undefined") {
     // A missing host likely means the reverse proxy has not been configured to
@@ -373,7 +397,7 @@ export function authenticateOrigin(req: express.Request): void {
 /**
  * Get the host from headers.  It will be trimmed and lowercased.
  */
-function getHost(req: express.Request): string | undefined {
+export function getHost(req: express.Request): string | undefined {
   // Honor Forwarded if present.
   const forwardedRaw = getFirstHeader(req, "forwarded")
   if (forwardedRaw) {
@@ -386,10 +410,14 @@ function getHost(req: express.Request): string | undefined {
     }
   }
 
-  // Honor X-Forwarded-Host if present.
+  // Honor X-Forwarded-Host if present.  Some reverse proxies will set multiple
+  // comma-separated hosts.
   const xHost = getFirstHeader(req, "x-forwarded-host")
   if (xHost) {
-    return xHost.trim().toLowerCase()
+    const firstXHost = xHost.split(",")[0]
+    if (firstXHost) {
+      return firstXHost.trim().toLowerCase()
+    }
   }
 
   const host = getFirstHeader(req, "host")
